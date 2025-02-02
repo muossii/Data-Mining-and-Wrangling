@@ -1,0 +1,311 @@
+---
+title: "DataMiningAndWrangling_FA1_3_KHAFAJI"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+```
+
+# Lecture 3 Data Transformation
+
+## Introduction
+
+Today we’ll continue with exploratory data analysis, focusing on data transformation using the dplyr
+package.
+
+Let’s load the tidyverse packages. And recall the diamonds dataset.
+```{r diamonds dataset}
+diamonds
+```
+
+In addition to plotting these data, we might want to explore them by transforming them in various ways:
+• Choose a subset of observations (rows) based on various criteria (filter()).
+• Choose a subset of variables (columns) by their names or other criteria (select()).
+• Reorder the rows (arrange()).
+• Create new variables as functions of existing variables (mutate()).
+• Collapse many values down to a single summary (summarise()).
+These can all be used in conjunction with group_by() which changes the scope of each function from operating on the entire dataset to operating on it group-by-group. These six functions provide the verbs for a language of data manipulation. These functions can be strung together in sequences using the pipe (%>%), which is built into the tidyverse.
+
+## Isolating Data
+
+### Filter()
+
+A filter operation subsets the observations (rows) of the data based on a certain logical condition:
+
+```{r filter}
+# subset to diamonds with price at least $10,000
+filter(diamonds, price >= 10000)
+```
+
+
+Commonly used comparison operators are == (equal), != (not equal), <= (less than or equal), < (less than), >= (greater than or equal), > (greater than), %in% (in). Note that %in% is usually employed to check whether a categorical variable belongs to a set of values, e.g. cut %in% c("Very Good", "Ideal").
+
+Logical conditions can be combined using boolean operators, including & (and), | (or), and ! (not). For example:
+
+```{r filter with combination}
+# subset to diamonds with price at least $10,000 AND clarity VVS1 or IF
+filter(diamonds, price >= 10000 & clarity %in% c("VVS1", "IF"))
+```
+
+Exercise: Filter diamonds to those with ideal cut and at least 3 carats. How many such diamonds are there?
+
+```{r exercise filter diamonds}
+# subset to diamonds with price at least $10,000 AND clarity VVS1 or IF
+filter(diamonds, carat >= 3 & cut == "Ideal")
+```
+
+There are 4 such diamonds.
+
+### select()
+
+A select operation subsets the columns of the data, for example based on their names:
+
+```{r select}
+# select columns corresponding to the "4 C's"
+select(diamonds, carat, cut, color, clarity)
+```
+
+The select() function comes with helper functions, such as the following:
+• - selects all columns except the given ones, e.g. select(diamonds, -carat)
+• : selects columns between the given ones, e.g. select(diamonds, carat:clarity)
+• contains selects columns containing a given string, e.g. select(diamonds, contains("c"))
+• starts_with selects columns starting with a given string, e.g. select(diamonds, starts_with("c"))
+• ends_with selects columns ending with a given string, e.g. select(diamonds, ends_with("t"))
+
+Exercise: Select all columns except x, y, z
+
+```{r exercise select}
+select(diamonds, -x, -y, -z)
+```
+
+### Arrange
+
+An arrange operation sorts the rows of the data frame according to one of its variables:
+
+```{r arrange}
+arrange(diamonds, carat)
+```
+
+
+```{r arrange desc}
+arrange(diamonds, desc(carat)) # sort diamonds by carat (descending)
+```
+
+Exercise: Arrange diamonds in decreasing order of their length. How long is the longest diamond?
+
+```{r arrange exercise}
+arrange(diamonds, desc(x))
+```
+The longest length is 10.74
+
+## Deriving Information
+
+### mutate()
+
+A mutate operation adds another column as a function of existing columns:
+
+```{r mutate}
+# add column that is the price per carat of each diamond
+mutate(diamonds, price_per_carat = price/carat)
+```
+
+Some useful functions to use with mutate are arithmetic operators (+, -, *, /, ˆ) or logical comparisons (<, <=, >, >=, !=). For example:
+
+```{r mutate operators ex}
+# add column that indicates whether a diamond's price per carat is at least $10k
+mutate(diamonds, fancy_diamond = price/carat > 10000)
+```
+Note that fancy_diamond is a logical variable.
+
+Complex combinations of existing variable can be obtained with mutate() via if_else() and case_when(). For example:
+
+```{r complex comb mutate}
+# use if_else() if you have two cases
+mutate(diamonds,
+good_value =
+if_else(
+condition = carat > 2, # check whether carat > 2
+true = price < 5000, # if so, good value if cheaper than $5k
+false = price < 1000 # if not, good value if cheaper than $1k
+)
+)
+```
+
+```{r mutate case when}
+
+# use case_when() if you have more than two cases
+mutate(diamonds,
+value =
+case_when(
+carat > 2 & price < 5000 ~ "good", # if carat > 2 and price < 5000, then good
+carat > 1 & price < 2500 ~ "ok", # if carat > 1 and price < 2500, then ok
+TRUE ~ "bad" # otherwise, bad
+)
+)
+```
+Exercise: Add a variable called good_color that is TRUE if the color is D, E, F, G and FALSE otherwise.
+
+```{r mutate exercise}
+mutate(diamonds, 
+       good_color = if_else(
+         condition = color %in% c("D", "E", "F", "G"),
+         true = TRUE,
+         false = FALSE
+       )
+       )
+```
+
+### Summarise()
+A summarise operation calculates summary statistics combining all rows of the data:
+
+```{r summarise}
+# find the number of "fancy" diamonds (price per carat at least $10000),
+summarise(diamonds, num_fancy_diamonds = sum(price/carat > 10000))
+```
+
+Useful summary functions are sum(), mean(), median(), min() max() var(), sd() for numeric variables
+and any(), all(), sum(), mean() for logical variables. The function n() takes no arguments and calculates the number of observations (rows) in the data.
+More than one summary can be extracted in a single call to summarise():
+
+```{r multiple summarise}
+# find the number of "fancy" diamonds (price per carat at least $10000),
+# as well as the mean price of a diamond
+summarise(diamonds,
+num_fancy_diamonds = sum(price/carat > 10000),
+mean_diamond_price = mean(price))
+```
+
+Exercise: Use summarise to determine if there are any diamonds of at least one carat that cost less that $1000.
+
+```{r summarise exercise}
+summarise(diamonds, cheap_one_carat = sum(carat>=1 & price<1000))
+```
+there are no such diamonds.
+
+## Multi Step Transformations
+
+### The pipe
+
+When stringing together multiple dplyr verbs, the pipe %>% is extremely useful. The pipe passes the quantity on its left-hand side to the first argument of the function on the right hand side: x %>% f(y) is translated to f(x,y). The first argument of all dplyr verbs is the data, so the pipe allows us to apply several operations to the data in sequence. For example:
+
+```{r pipe}
+diamonds %>% # pipe in the data
+filter(cut == "Premium") %>% # restrict to premium cut diamonds
+mutate(price_per_carat = price/carat) %>% # add price_per_carat variable
+arrange(desc(price_per_carat)) # sort based on price_per_carat
+```
+The pipe can be used to pass data between different tidyverse packages, e.g. from dplyr to ggplot2:
+
+```{r pipe dplyr to ggplot2}
+diamonds %>% # pipe in the data
+filter(cut == "Premium") %>% # restrict to premium cut diamonds
+mutate(price_per_carat = price/carat) %>% # add price_per_carat variable
+ggplot() + # start a ggplot
+geom_histogram(aes(x = price_per_carat)) # add a histogram
+```
+
+
+Exercise: Compute the mean price for diamonds of volume at least one carat.
+
+```{r pipe exercise}
+diamonds %>%
+  summarise(mean_price = mean(carat >= 1, na.rm = TRUE) )
+```
+
+### Group by
+
+Sometimes we’d like to apply transformations to groups of observations based on categorical variables in our
+data. For example, suppose we’d like to know the maximum diamond price for each value of cut. We can do the following:
+
+```{r group by}
+diamonds %>% # pipe in the data
+group_by(cut) %>% # group by cut
+summarise(max_price = max(price)) # find the max price for each cut
+```
+
+We can group by multiple characteristics, e.g.
+
+```{r group by charac mult}
+diamonds %>% # pipe in the data
+group_by(cut, clarity) %>% # group by both cut and clarity
+summarise(max_price = max(price)) # find the max price for each group
+```
+
+Note that the resulting data are still grouped based on cut. This is because each call to summarise() peels off just one layer of grouping. We might want to ungroup() the resulting data for downstream use:
+
+```{r group by downtream}
+diamonds %>% # pipe in the data
+group_by(cut, clarity) %>% # group by both cut and clarity
+summarise(max_price = max(price)) %>% # find the max price for each group
+ungroup() # remove grouping
+```
+
+A common type of grouped summary is to tabulate the number of values of a categorical variable. A shortcut for this is the count() function, e.g.: 
+
+```{r count dias}
+count(diamonds, cut)
+```
+
+Exercise: Reproduce the output of count(diamonds, cut) via group_by() and summarise().
+
+```{r exercise}
+diamonds %>%
+  group_by(cut) %>%
+  summarise(n=n())
+```
+
+### Storing the transformed data
+
+Note that applying various functions to diamonds does not actually change the data itself. We can check that, after all those operations, diamonds is still the same as it was in the beginning:
+
+```{r diamonds check}
+
+diamonds
+```
+
+If we want to save the transformed data, we have the use the assignment operator, <-:
+
+```{r transformed data save}
+max_prices <- diamonds %>% # pipe in the data
+group_by(cut) %>% # group by cut
+summarise(max_price = max(price)) # find the max price for each cut
+max_prices
+
+```
+
+
+## References
+
+ dplyr cheat sheet
+• Work with Data tutorials
+• R4DS Chapter 5
+
+
+## Excercises
+
+Use dplyr to answer the following questions:
+
+• What is the minimum diamond price in this dataset? See if you can find the answer in two different
+ways (i.e. using two different dplyr verbs).
+```{r diamonds min}
+min(diamonds$price)
+```
+
+• How many diamonds have length at least one and a half times their width?
+```{r dias length excercise}
+diamonds %>% 
+  summarise(dias_big = sum(x>= y*1.5))
+```
+
+• Among diamonds with colors D, E, F, G, what is the median number of carats for diamonds of each
+cut?
+
+```{r excercise colors}
+diamonds %>%
+  filter(color %in% c("D", "E", "F", "G")) %>%
+  summarise(median_carats = median(carat))
+
+```
