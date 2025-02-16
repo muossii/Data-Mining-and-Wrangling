@@ -1,0 +1,216 @@
+---
+title: "FA2_KHAFAJI_DATA_MINING"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+```
+
+# FA2 - Data Wrangling, Manipulation, and Visualization
+
+We first want to get the tibbles of Information about TB cases in various countries from 1980 to 2013, and Population data of each country across time.
+
+```{r load data who and population}
+tb_data <- as_tibble(who)
+head(tb_data)
+population_data <- as_tibble(population)
+head(population_data)
+
+dim(tb_data)
+dim(population_data)
+
+sapply(population_data, class)
+```
+
+Since everything looks alright with the data types, we can proceed with further cleaning the tb dataset.
+
+## 3 Tidying Data
+
+### 3.1
+
+For the WHO tuberculosis dataset, we'll need country, iso2, iso3, year, TB type, sex, and age group
+
+```{r pivot tb}
+who2 <- pivot_longer(tb_data, -c("country", "year", "iso2", "iso3"), names_to = "TBType_Sex_AgeGroup", values_to = "Cases")
+
+head(who2)
+
+```
+
+```{r creating who3}
+
+who3 <- who2 %>% 
+  separate_wider_delim(TBType_Sex_AgeGroup, "_", names = c(NA, "TB_type", "Sex_AgeGroup"), too_few = "align_end") %>% 
+  mutate(TB_type = str_remove_all(TB_type, c("new")) ) 
+
+head(who3)
+
+```
+
+
+```{r who_tidy}
+who_tidy <- who3 %>% 
+  separate(Sex_AgeGroup, into = c("sex", "age_group"), sep = "(?<=[A-Za-z])(?=[0-9])") %>%
+  mutate(age_group = str_replace_all(age_group, "(\\d{2})(?=\\d{2}$)", "\\1-") )
+
+head(who_tidy)
+
+```
+
+
+
+Since the WHO tuberculosis dataset 
+
+Since we have essentially fixed the structure of our tuberculosis table, we can then proceed with other endeavors.
+
+### 3.2
+
+For the population dataset, We'll need the country, year, and population.
+
+```{r pop check}
+population_tidy <- population_data
+
+head(population_tidy)
+```
+Since the data looks golden, we can use it as is.
+
+### 3.3 Joining Datasets.
+
+We can now then join the two datasets, using left join. We need to match the Country and the Year. This is the default behavior of left_join, joining with "by = join_by(country, year)"
+
+```{r}
+tuberculosis <- left_join(who_tidy, population_tidy)
+
+head(tuberculosis)
+```
+
+### 3.4 Cleaning data
+
+We need to filter out rows with NA. We should also remove columns that we won't have use for.
+
+```{r tuberculosis extra clean}
+
+tuberculosis <- tuberculosis %>% 
+  select(-c("iso2", "iso3")) %>%
+  drop_na()
+  
+
+head(tuberculosis)
+
+```
+
+## 4. Data Manipulation
+Next, we want to know the tuberculosis cases per 100,000 by year, sex, age group, and TB Type.
+
+```{r cases by 100k year}
+
+tuberculosis_100k_year <- tuberculosis %>% 
+  group_by(country, year) %>%
+  summarise(cases_per_100k = mean(Cases/population*100000))
+
+head(tuberculosis_100k_year)
+  
+
+```
+
+from here, we can identify the country and year with the highest and lowest cases per 100k:
+
+```{r min max cases per 100k country}
+
+max_year = max(tuberculosis_100k_year$cases_per_100k)
+min_year = min(tuberculosis_100k_year$cases_per_100k)
+
+
+tuberculosis_100k_year %>% 
+  filter(cases_per_100k == max_year | cases_per_100k == min_year) %>%
+  arrange(desc(cases_per_100k))
+  
+
+```
+
+Niue in 2011 had the highest incidence rate among all the countries in the dataset. While numerous countries, in various years, have had 0 cases per 100k. 
+
+```{r cases by 100k TB_type}
+
+head(tuberculosis %>% 
+  group_by(country, TB_type) %>%
+  summarise(cases_per_100k = mean(Cases/population*100000)))
+  
+
+```
+
+```{r cases by 100k sex}
+head(
+tuberculosis %>% 
+  group_by(country, sex) %>%
+  summarise(cases_per_100k = mean(Cases/population*100000))
+)
+
+```
+
+```{r cases by 100k Age Group}
+
+tuberculosis_100k_age <-
+  tuberculosis %>% 
+  group_by(country, age_group) %>%
+  summarise(cases_per_100k = mean(Cases/population*100000))
+
+head(tuberculosis_100k_age)
+
+```
+
+
+## 5. Data Visualization
+
+ Plot the total cases per 100k as a function of year for China, India, and the United States:
+
+  Use a log scale on the y-axis (scale_y_log10()). Describe emerging patterns.
+  
+```{r}
+tuberculosis_100k_year %>%
+  filter(country %in% c("United States of America", "China", "India")) %>%
+  ggplot(aes(x=year, y=cases_per_100k, color=country))+
+  geom_point()+
+  scale_color_manual(values = c("United States of America" = "blue", "China" = "red", "India" = "orange"))+
+  scale_y_log10()
+
+```
+We can see that the incidence rate in the united states is dropping down. In contrast, China's have remained relatively stagnant, while India's have risen drastically, although both have, at recent times, curbed the exponential increase in the incidence rate.
+
+```{r}
+tuberculosis_100k_age %>% 
+  ggplot(aes(x=age_group, y=cases_per_100k))+
+  geom_boxplot()
+
+```
+
+The incidence rates were highest at the age range of 25-34, and 35-44. It is lowest in 0-14 and 65 above.
+
+
+```{r}
+left_join(tuberculosis_100k_year, population_tidy) %>% filter(year == 2000) %>%
+  ggplot(aes(x=population, y=cases_per_100k))+
+  geom_point()+
+  scale_y_log10()+
+  scale_x_log10()
+
+
+```
+
+The population of a country has little to do with its incidence rate in the 2000s.
+
+
+
+
+
+
+
+
+
+
+
+
+
