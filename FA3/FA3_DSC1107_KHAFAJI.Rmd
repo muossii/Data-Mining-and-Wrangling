@@ -1,0 +1,429 @@
+---
+title: "FA3_DSC1107_KHAFAJI"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggrepel)	# for scatter plot point labels 
+library(kableExtra) # for printing tables 
+library(cowplot)	# for side by side plots
+
+```
+
+# Major League Baseball: Payroll and Wins
+
+Let's analze the payroll and wins of 30 major league baseball teams from 1998 to 2014. 
+
+First, let's load the data:
+
+```{r load ml data, echo=FALSE}
+load("ml_pay.rdata")
+```
+
+```{r ml_pay head}
+head(ml_pay)
+```
+
+the payroll column corresponds to the total team payroll (in billion USD) over the years, while the avgwin column is the aggregated win percentage from 1998 to 2014. the Team.name.2014 column corresponds to the team name. 
+
+p1998, p1999,..., p2014 corresponds to the payroll for each year (in million USD).
+X1998, X1999, ..., X2014 corresponds to the number of wins for each year.
+X1998.pct, X1999.pct, ..., X2014.pct corresponds to the win percentage for each year.
+
+## Data Cleaning
+
+Let's make 4 tables:
+Aggregate table - one table for the team name, the total payroll, and the average win rate over the years
+Payroll table - one table for the payroll for each year, with the respective team name
+Win Count table - one table for the number of wins for each given year, with the respective team name
+Win Rate table - one table for the win rate for each given year, with the respective team name.
+
+we can then join the payroll table, win count table, and win rate table, to make a comprehensive "per year" table
+
+```{r aggregate table}
+aggregate_table_mlb <- ml_pay %>% select(Team.name.2014, payroll, avgwin) %>%
+  rename(MLB_Team = Team.name.2014, total_pay = payroll, avg_winrate = avgwin) %>% # rename columns
+  mutate(total_pay = total_pay *(10e2)) #to transform into millions USD
+   
+
+aggregate_table_mlb
+
+```
+
+First, we retrieved all aggregated data, and renamed the columns. We then converted the total payroll amount from billion USD to million USD, to match the rest of the payroll data. Next, we created the dollars/win column.
+
+Now, let's get the payroll table:
+
+```{r payroll}
+payroll_mlb <- ml_pay %>% select(Team.name.2014, num_range("p",1998:2014)) %>%
+  rename(MLB_Team = Team.name.2014) %>%
+  pivot_longer(starts_with("p"), names_to = "year", values_to = "payroll") %>%
+  mutate(year = str_remove_all(year, c("p"))) %>%
+  mutate_at(c("year"), as.integer)
+
+head(payroll_mlb)
+```
+
+We simply retrieved the columns that contained yearly payroll data and pivoted it. We then cleaned the values containing the year so that it could serve as our year column.
+
+Let's then create the win count table:
+
+
+```{r win count}
+wincount_mlb <- ml_pay %>% select(Team.name.2014, num_range("X",1998:2014)) %>%
+  rename(MLB_Team = Team.name.2014) %>%
+  pivot_longer(num_range("X",1998:2014), names_to = "year", values_to = "win_Count") %>%
+  mutate(year = str_remove_all(year, c("X"))) %>%
+  mutate_at(c("year"), as.integer)
+
+head(wincount_mlb)
+
+```
+
+Similar to how we cleaned the yearly payroll table
+
+
+Lastly, lets get the table for the winrate
+
+```{r winrate table}
+mlb_winrate <- ml_pay %>% select(Team.name.2014, ends_with(".pct")) %>%
+  rename(MLB_Team = Team.name.2014) %>%
+  pivot_longer(ends_with(".pct"), names_to = "year", values_to = "win_Rate") %>%
+  mutate(year = str_remove_all(year, "X|\\.pct" )) %>%
+  mutate_at(c("year"), as.integer)
+
+head(mlb_winrate)
+```
+
+What we did was similar to the last 2 tables.
+
+We can now join the three tables that we made:
+
+```{r complete table per year}
+mlb_pay_wincount_winrate <- left_join(payroll_mlb, wincount_mlb, join_by("MLB_Team", "year")) %>%
+  left_join(., mlb_winrate, join_by("MLB_Team", "year")) %>% 
+  mutate(total_games = as.integer(win_Count/win_Rate)) %>% #create total games table
+  mutate(dollars_per_win = payroll/win_Count) # create dollars/win column
+
+head(mlb_pay_wincount_winrate)
+
+```
+
+We also went ahead and created total_games column, getting the total games played for each team and each year, as well as creating the dollars/win column.
+
+Now, let's add a total games column in the aggregate table using the yearly table.
+
+```{r add total games to agg}
+
+total_win_df <- mlb_pay_wincount_winrate %>%
+  group_by(MLB_Team) %>%
+  summarise(total_Win = sum(win_Count))
+
+aggregate_table_mlb <- left_join(aggregate_table_mlb, total_win_df, join_by("MLB_Team")) %>%
+  mutate(dollars_per_win = total_pay/total_Win) # create dollars/win,
+
+head(aggregate_table_mlb)
+
+```
+
+
+## Data Exploration
+
+### Payroll across years
+
+First, let's get the histogram of the total payroll amount across the years.
+
+```{r hist of total payroll}
+
+aggregate_table_mlb %>% ggplot(aes(x=total_pay)) +
+  geom_histogram(binwidth = 100) +
+  geom_density(alpha=.2, fill="blue")+
+  xlab("Total Payroll from 1998 to 2014, in million USD")+
+  ylab("Number of teams") +
+  ggtitle("Histogram of Total Payroll of MLB teams from 1998 to 2014, in million USD")
+
+
+```
+
+Let's figure out the top 5 biggest and top 5 smallest spenders across all years:
+
+```{r biggest and smallest}
+
+aggregate_table_mlb %>% arrange(desc(total_pay)) %>%
+  slice(sort(c(seq_len(5), n() - seq_len(5) +1))) %>%
+  select(c("MLB_Team", "total_pay"))
+
+teams_lowest_payroll <- aggregate_table_mlb %>% arrange(desc(total_pay)) %>%
+  slice(sort(c(n() - seq_len(5) +1))) %>%
+  select(c("MLB_Team", "total_pay"))
+
+teams_highest_payroll <- aggregate_table_mlb %>% arrange(desc(total_pay)) %>%
+  slice(sort(c(seq_len(5)))) %>%
+  select(c("MLB_Team", "total_pay"))
+```
+
+We can see that the New York Yankees are the highest spenders in terms of payroll, paying a total of 2.7 billion USD across the years.
+
+After the Yankees, the figure drops to below 2 billion USD, with a 700 million USD gap between the Yankees and the 2nd highest spender, the Boston Red Sox. But even the Sox have some quarter billion USD gap compared to the next highest spending team, the Los Angeles Dodgers. The Philadelphia Phillies, and the New York Mets, the 4th and 5th highest spending, respectively, have spent close to that the Dodgers have spent, with less than a 100 million dollar difference.
+
+The lowest spenders have few difference in their spending, indicating that there is a lower bound that an MLB team is willing to spend for the payroll of their players. Among them, the Miami Marlins are lowest with 667.8 million USD total spending across the years. It is followed by the Tampa Bay Rays, Pittsburgh Pirates, Kansas City Royals, and the San Diego Padres.
+
+We can visualize this better using a bar graph:
+
+```{r total payroll bar graph}
+
+aggregate_table_mlb %>% arrange(desc(total_pay)) %>%
+  ggplot( aes(x=reorder(MLB_Team, -total_pay)  , y=total_pay) ) +
+  geom_bar(stat = "identity")+
+  theme(axis.text.x=element_text(angle=45,hjust=1, vjust = 1))+
+  xlab("Major League Baseball Team") +
+  ylab("Total Payroll Spending (million USD)") +
+  ggtitle("MLB teams total payroll spending in million USD (1998-2014)")
+
+
+```
+
+
+Now, let's graph the year vs payroll for the league across the years. Note that this payroll data is in million USD. This also uses the top 5 spender teams and bottom 5 spender teams for the high payroll and low payroll values, respectively.
+
+```{r payroll across year graph}
+
+mlb_pay_wincount_winrate %>% group_by(year) %>%
+  summarise(
+    ave_payroll = mean(payroll),
+    high_payroll = mean(sort(payroll, decreasing = TRUE)[1:5]), 
+    low_payroll = mean(sort(payroll, decreasing = FALSE)[1:5])
+    ) %>% 
+  pivot_longer( 
+      c("ave_payroll", "high_payroll", "low_payroll"), 
+      names_to = "payroll_Measure_Name",
+      values_to = "payroll_Measure"
+      ) %>%
+  ggplot(aes(x=year, y=payroll_Measure, color=payroll_Measure_Name))+
+  geom_line(linewidth=1)+
+  scale_color_manual(values = 
+                       c("ave_payroll" = "yellow", 
+                         "high_payroll"="green", 
+                         "low_payroll"= "red"))
+
+```
+
+
+Early on in our data, we can see that there is a uniform gap between the minimum, average, and maximum payroll spending. As the years went by, the average spending on payroll remained close to the minimum payroll spending for each year. In contrast, the maximum payroll spending shot up, creating a huge gap.
+
+
+### Win percentage across years
+
+First, we want to look at the histogram of the average win rates from 1998 to 2014. 
+
+```{r win percentage}
+
+aggregate_table_mlb %>%
+  ggplot(aes(x=avg_winrate)) +
+  geom_histogram(binwidth = 0.01) +
+  geom_density(alpha=.2, fill="blue")+
+  xlab("Average winrate")+
+  ylab("Number of teams")+
+  ggtitle("Histogram of Average winrate of MLB from 1998 to 2014")
+
+```
+
+Next, we want to look at the teams with the highest and lowest win rates
+
+
+```{r average win rate bar graph}
+
+aggregate_table_mlb %>% arrange(desc(avg_winrate)) %>%
+  ggplot( aes(x=reorder(MLB_Team, -avg_winrate)  , y=avg_winrate) ) +
+  geom_bar(stat = "identity")+
+  theme(axis.text.x=element_text(angle=45,hjust=1, vjust = 1))+
+  xlab("Major League Baseball Team") +
+  ylab("Win Rate") +
+  ggtitle("MLB teams average winrate (1998-2014)")
+
+
+```
+
+```{r biggest and smallest winrate}
+
+aggregate_table_mlb %>% arrange(desc(avg_winrate)) %>%
+  slice(sort(c(seq_len(5), n() - seq_len(5) +1))) %>%
+  select(c("MLB_Team", "avg_winrate"))
+
+highest_winrate <- aggregate_table_mlb %>% arrange(desc(avg_winrate)) %>%
+  slice(sort(c(seq_len(5)))) %>%
+  select(c("MLB_Team", "avg_winrate"))
+
+lowest_winrate <- aggregate_table_mlb %>% arrange(desc(avg_winrate)) %>%
+  slice(sort(c(n() - seq_len(5) +1))) %>%
+  select(c("MLB_Team", "avg_winrate"))
+```
+
+
+The most successful team has been the New York Yankees, with a 58.31% win rate. They are followed by the St. Louis Cardinals, the Atlanta Braves, the Boston Red Sox, and the Los Angeles Angels.
+
+The most unsuccessful was Kansas City Royals with a 43.42% winrate, followed by the Pittsburgh Pirates, the Baltimore Orioles, the Colorado Rockies, and the Washington Nationals, all with a win rate below 47% 
+
+
+Now, let's graph the average win rate for each year, as well as the average win rate of the top 5 best performing teams that year, and the average win rate of the bottom 5 worst performing teams.
+
+```{r win rate across year graph}
+
+mlb_pay_wincount_winrate %>% group_by(year) %>%
+  summarise(
+    ave_winrate = mean(win_Rate),
+    high_winrate = mean(sort(win_Rate, decreasing = TRUE)[1:5]), 
+    low_winrate = mean(sort(win_Rate, decreasing = FALSE)[1:5])
+    ) %>% 
+  pivot_longer( 
+      c("ave_winrate", "high_winrate", "low_winrate"), 
+      names_to = "winrate_Measure_Name",
+      values_to = "winrate_Measure"
+      ) %>%
+  ggplot(aes(x=year, y=winrate_Measure, color=winrate_Measure_Name))+
+  geom_line(linewidth=1)+
+  scale_color_manual(values = 
+                       c("ave_winrate" = "yellow", 
+                         "high_winrate"="green", 
+                         "low_winrate"= "red")) +
+  ylab("Win rate")+
+  ggtitle("Major League Baseball teams win rate over the years")
+
+```
+
+Of course, since there are no ties in Major League Baseball, the average win rate stays at around 50%.
+
+From 1998 to 2014, while erratic, the average win rate of the top 5 best performing teams have actually trended closer to the 50% win rate line, albeit slightly.
+
+However, the average win rate of the 5 teams with the lowest win rates for each season have been erratic, with varying levels of success.
+
+It can also be noted that, when the average win rate of the worst performing teams increase, the average win rate of the best performing teams for that year decreases. The opposite is also observed.
+
+
+
+### Win percentage versus payroll
+
+We have already explored the payroll and win rate variables. Now, let's see if they have any interaction.
+
+Since we're dealing with continuous variables, let's use a scatter plot to visualize them.
+
+let's start with the aggregate/overall data
+
+```{r aggregate win rate vs payroll}
+aggregate_table_mlb %>% 
+  ggplot(aes(x=avg_winrate, y=total_pay)) +
+  geom_point() +
+  stat_smooth(
+    method = "lm", 
+    formula = y ~ x, 
+    geom = "smooth"
+    )+
+  ylab("Total payroll")+
+  xlab("average win rate")+
+  ggtitle("average win rate vs total payroll amount (1998-2014) ")
+
+```
+
+Although it isn't clear, the line of best fit shows that the average win rate increases with the total payment
+
+
+Now, lets use our yearly data too see if time makes a difference.
+
+```{r yearly win rate vs payroll}
+
+mlb_pay_wincount_winrate %>% 
+  ggplot(aes(x=year, y=win_Rate, size = payroll)) +
+  geom_point(alpha=0.7) +
+  scale_size()+
+  ylab("Team win rate")+
+  ggtitle("team win rate vs payroll for each given year")
+```
+
+As we can see from the bubble chart, as the year goes by, the discrepancy of the win rates between the teams actually went down. This coincides with the increase of the average payroll per year. We can also see that the teams with the highest payroll is often among the top teams in terms of win rates, but that teams with a smaller payroll budget for that year can sometimes perform better. 
+
+
+
+### Team efficiency
+
+In team efficiency, we are using dollars per win, which we would be prudent to remember is actually million dollars/win.
+
+
+First, let's create a histogram for the aggregate efficiency
+
+```{r efficiency histogram}
+aggregate_table_mlb %>% ggplot(aes(x=dollars_per_win)) +
+  geom_histogram(binwidth = 0.05)+
+  xlab("dollars/win")+
+  ylab("Team count")+
+  ggtitle("dollars/win histogram")
+
+```
+We can see that most teams spend an aggregate amount of 750 thousand to 1.25 million USD for each win from 1998 to 2014. In that regard, we have one outlier, spending around 1.6 million per win, which is very inefficient.
+
+Next, let's see the teams with the highest efficiency
+
+```{r efficiency table}
+aggregate_table_mlb %>% arrange(dollars_per_win) %>%
+  slice(sort(c(seq_len(5), n() - seq_len(5) +1))) %>%
+  select(c("MLB_Team", "dollars_per_win"))
+
+low_dolperwin <- aggregate_table_mlb %>% arrange(dollars_per_win) %>%
+  slice(sort(c(seq_len(5)))) %>%
+  select(c("MLB_Team", "dollars_per_win"))
+
+high_dolperwin <- aggregate_table_mlb %>% arrange(dollars_per_win) %>%
+  slice(sort(c(n() - seq_len(5) +1))) %>%
+  select(c("MLB_Team", "dollars_per_win"))
+
+```
+
+```{r efficiency ranking}
+aggregate_table_mlb %>% arrange(dollars_per_win) %>%
+  ggplot( aes(x=reorder(MLB_Team, dollars_per_win)  , y=dollars_per_win) ) +
+  geom_bar(stat = "identity")+
+  theme(axis.text.x=element_text(angle=45,hjust=1, vjust = 1))+
+  xlab("Major League Baseball Team") +
+  ylab("Dollars per Win") +
+  ggtitle("MLB teams aggregate dollars per win (1998-2014)")
+```
+
+
+We can see that the Miami Marlins are the most efficient team in the MLB in terms of dollars per win, spending roughly 521.7 thousand USD per win. It is followed by the Tampa Bay Rays, Oakland Athletics, Pittsburgh Pirates, and the San Diego Padres. Notably, these are also the teams have the lowest total payroll spending, and the Pittsburgh Pirates are among those with the lowest average win rate.
+
+In terms of most inefficient, the New York Yankees spends 1.67 million dollars for each win. The Boston Red Sox 1.3 million for each, followed by the Los Angeles Dodgers, New York Mets, and the Philadelphia Phillies.
+
+Next, let's see how the average efficiency changes per year:
+
+```{r year vs efficiency}
+mlb_pay_wincount_winrate %>% group_by(year) %>%
+  summarise(
+    ave_dp = mean(dollars_per_win),
+    high_dp = mean(sort(dollars_per_win, decreasing = TRUE)[1:5]), 
+    low_dp = mean(sort(dollars_per_win, decreasing = FALSE)[1:5])
+    ) %>% 
+  pivot_longer( 
+      c("ave_dp", "high_dp", "low_dp"), 
+      names_to = "dp_Measure_Name",
+      values_to = "dp_Measure"
+      ) %>%
+  ggplot(aes(x=year, y=dp_Measure, color=dp_Measure_Name))+
+  geom_line(linewidth=1)+
+  scale_color_manual(values = 
+                       c("ave_dp" = "yellow", 
+                         "high_dp"="red", 
+                         "low_dp"= "green")) +
+  ylab("Dollars per Win")+
+  ggtitle("Major League Baseball teams win rate over the years")
+
+```
+
+The graph shows that the average dollars per win increases within the league for each passing season, a sign that the league is getting more and more competitive after each season. Increase in dollars per win was somewhat uniform, except for the years after 2010, when teams with low efficiency started paying even more for each win than those with high efficiency, although there was a spike all across the board.
+
+
+
+
+
