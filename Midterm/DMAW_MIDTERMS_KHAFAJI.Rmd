@@ -1,0 +1,519 @@
+---
+title: "DMAW_MIDTERMS_KHAFAJI"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup,   include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(caret)
+library(conflicted)
+library(readxl)
+library(ggrepel)	# for scatter plot point labels 
+library(kableExtra) # for printing tables 
+library(cowplot)	# for side by side plots
+library(splines)
+library(Metrics)
+library(glmnet)
+library(skimr)
+library(janitor)
+library(cowplot)
+library(MASS)
+library(leaps)
+library(rattle)
+library(pROC)
+library(e1071)
+library(MLmetrics)
+library(randomForest)
+library(glmnet)
+
+```
+
+
+# Exploring Customer Churn
+
+Our data set involves data relevant to customer churn. It has the following columns: 
+
+- CustomerID: The customer's ID
+- Gender:  the customer's gender
+- SeniorCitizen: if the customer is a senior citizen 
+-  Partner: If the customer is a partner
+-  Dependents: if the customer has dependents
+-  Tenure: The tenure of the customer
+-  PhoneService: If the customer has phone service
+-  InternetService: The internet service of the customer, if they have one
+-  Contract: Their contract type
+-  MonthlyCharges: Their monthly charge for the service
+-  TotalCharges: Total charged amount
+-  Churn: If customer left the service or not.
+
+
+## Data Mining
+
+### loading data
+
+First, let's load our data set into a variable called cust_churn
+```{r customer churn load data set}
+cust_churn <- read_csv("customer_churn.csv")
+head(cust_churn)
+```
+
+now, let's get the summary of the dataset:
+
+```{r cust churn summary}
+
+cat("The structure of the data set is:\n")
+print(str(cust_churn))
+
+#cat("The summary of the data set is:\n")
+#summary(cust_churn)
+
+cat("\n\nThe Summary Statistics for the data set are:\n")
+skimr::skim(cust_churn)
+
+cat("\n\n")
+
+
+```
+
+We can see from our summary that we have 1 ID table, 7 categorical variables, and three numerical variables. We also have no missing values.
+
+### Data Visualization
+
+Let's take a quick look at what our data says. 
+
+Let's take a look at monthly charges per gender.
+
+```{r Monthly charges vs Gender}
+
+cust_churn %>% ggplot(aes(x=Gender, y=MonthlyCharges)) +
+  geom_boxplot()+
+  labs(title="Distribution of Monthly Charges for each gender", y="Monthly Charges", x= "Gender")
+
+```
+
+We can see that the median monthly charges for each gender is roughly equal, if not slightly less for female customers. However, the interquartile range of the monthly charges for females is slightly larger than for their male counterparts. 
+
+Next, let's look at the distribution of monthly charges for each churn category.
+
+```{r monthly charges vs senior citizen}
+cust_churn %>% ggplot(aes(x=Churn, y=MonthlyCharges)) +
+  geom_boxplot()+
+  labs(title="Distribution of Monthly Charges for each Churn Category", y="Monthly Charges", x= "Churn")
+```
+
+We can see that the median monthly charges for churned customer is slightly less than current customers. This also follows for the 1st and 3rd quartile.
+
+
+Lastly, let's look at monthly charges for vs tenure, faceted by gender.
+```{r monthly charges vs tenure by gender}
+cust_churn %>% ggplot(aes(x=Tenure, y=MonthlyCharges)) +
+  geom_density2d_filled()+
+  facet_wrap(~Gender)+
+  labs(title="Monthly Charges Tenure", y="Monthly Charges", x= "Tenure")
+
+```
+
+The 2d Density plot shows us that, while the distribution isn't really uniform, The monthly charges for female customers rises with their tenure. In contrast, for males, their monthly charge is relatively higher for customers that has short tenures, lower for customers with medium or long length of tenures.
+
+### Data Transformation
+
+Now, since we don't have missing values, all we have to do is convert categorical variables to factor variables. We would also normalize or standardize numerical features, if necessary.
+
+let's first convert our categorical variables to factor variables:
+
+```{r data transformation convert categorical to factor}
+
+cust_churn <- cust_churn %>% mutate( SeniorCitizen = case_when(
+                                                               SeniorCitizen == 0 ~ "Not Senior",
+                                                               SeniorCitizen == 1 ~ "Senior Citizen"
+                                                               )) %>%
+  mutate_at( c('Gender', 'SeniorCitizen', 'Partner', 'Dependents', 'PhoneService', 'InternetService', 'Contract', 'Churn'), as.factor)
+
+str(cust_churn)
+```
+
+Now, let's normalize our numeric data:
+
+```{r standardizing}
+
+cust_churn_norm <- cust_churn %>% mutate(across(where(is.numeric), ~ as.numeric(scale(.x))))
+
+head(cust_churn_norm)
+  
+
+```
+
+As we can see, our numeric data is now z-score normalized.
+
+### Data Wrangling
+
+Since we have a relatively huge data set, let's filter outliers, if our data has them. Since we have normalized our numerical data, we can simply filter if the absolute value of their z-score is greater than 3.
+
+```{r outlier filter}
+
+cust_churn_norm <- cust_churn_norm %>% 
+  dplyr::filter(across(is.numeric, ~ abs(.x) < 3))
+
+cust_churn_norm
+    
+```
+
+### Review
+
+In this chapter, we simply loaded up the data, and cleaned/transformed it so that it is much better suited for use in machine learning. Some of the things we did is transformed categorical variables into an R factor data type, which would make it easier for the machine to use. We also Z-score normalized our data, and removed outliers (removing data points with a z-score of > 3).
+
+We also explored the distribution of the Monthly Charges for gender and churn category, finding minimal differences. We also found that the monthly charges differed for males and females with regards to tenure. 
+
+
+## Tuning Predictive Models
+
+### Model Complexity
+
+Now, let's try fitting a decision tree and a logistic regression model to our data set.
+
+Let's first double check our data:
+
+```{r xbar}
+
+cust_churn_norm_features <- cust_churn_norm %>% dplyr::select(-CustomerID)
+
+vars_to_check <- cust_churn_norm_features %>% 
+  dplyr::select(where(is.factor) ) %>%
+  dplyr::select(-Churn) %>% names()
+
+for (var in vars_to_check) {
+  
+  formula <- as.formula(paste("~ Churn +", var))
+  
+  tbl <- xtabs(formula, data = cust_churn_norm_features)
+  
+  print(tbl)
+}
+
+
+```
+
+As we can see, we have data points in all of the intersections of churn and other factor variables. However, what's worrying is the intersection of "yes" in churn and Senior Citizens. But let's find out later if it will be a problem. 
+
+Let's first create the splits:
+```{r create split}
+set.seed(123)
+
+trainIndex <- createDataPartition(cust_churn_norm_features$Churn, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+churnTrain <- cust_churn_norm_features[ trainIndex,]
+churnTest  <- cust_churn_norm_features[-trainIndex,]
+```
+
+Let's now create our logistic regression.
+
+
+```{r get logreg}
+
+
+model_logistic <- glm(formula = Churn ~ ., family = "binomial", data=cust_churn_norm_features)
+
+summary(model_logistic)
+
+ll.null <- model_logistic$null.deviance/-2
+ll.proposed <- model_logistic$deviance/-2
+
+cat("\n\nThe Psuedo R^2 is:", (ll.null-ll.proposed)/ll.null)
+cat("\nAnd the p-value is: ", 1-pchisq(2*(ll.proposed-ll.null), df=(length(model_logistic$coefficients)-1)))
+
+```
+
+Given by the p-value (R^2 = 0.0016, p-val = 0.1) , we can say that the regression does not properly predict Churn. However, we can see that the contract length does have a significant effect in the regression (Z = -1.989, p-value = 0.467), specifically the one year contracts.
+
+Let's try only using the contracts.
+
+```{r get logreg 2}
+
+
+model_logistic_2 <- glm(formula = Churn ~ Contract, family = "binomial", data=cust_churn_norm_features)
+
+summary(model_logistic_2)
+
+ll.null <- model_logistic_2$null.deviance/-2
+ll.proposed <- model_logistic_2$deviance/-2
+
+cat("\n\nThe Psuedo R^2 is:", (ll.null-ll.proposed)/ll.null)
+cat("\nAnd the p-value is: ", 1-pchisq(2*(ll.proposed-ll.null), df=(length(model_logistic_2$coefficients)-1)))
+
+```
+We can see that the model did better than the last, getting a better result (R^2 = 0.00066, p-val = 0.084). 
+
+let's now get the AUC of both:
+
+```{r logreg auc}
+
+predicted_probs <- predict(model_logistic, type = "response")
+roc_curve <- roc(cust_churn_norm_features$Churn, predicted_probs)
+auc_value <- pROC::auc(roc_curve)
+cat("AUC of first model:", auc_value, "\n")
+
+predicted_probs <- predict(model_logistic_2, type = "response")
+roc_curve <- roc(cust_churn_norm_features$Churn, predicted_probs)
+auc_value <- pROC::auc(roc_curve)
+cat("AUC of second model:", auc_value, "\n")
+
+```
+
+Despite the first model getting a lower p-value than the second, we can see that the first model, albeit slightly, performs better than the second. Overall, both models are bad, and are no better than making our own guesses.  
+
+Now, let's try using decision trees.
+
+
+
+```{r decision tree}
+
+
+churn.tree <- train(
+  Churn ~ .,
+  data = churnTrain,
+  method="rpart",
+  trControl = trainControl(method = "cv", number=10, classProbs = TRUE, summaryFunction = twoClassSummary),
+  tuneGrid = data.frame(cp = seq(0, 0.01, by = 0.001)),
+  weights = ifelse(churnTrain$Churn == "Yes",12, 1),
+  metric = "ROC"
+  
+  )
+
+churn.tree
+
+```
+
+```{r dec tree results}
+predicted_probs <- predict(churn.tree, newdata = churnTest, type = "prob")$Yes
+
+# Calculate the ROC curve
+roc_curve <- roc(churnTest$Churn, predicted_probs)
+
+# Compute the AUC
+auc_value <- pROC::auc(roc_curve)
+print(paste("ROC AUC:", auc_value))
+
+```
+
+Setting the weight of Churn = "Yes" to 12, yields the best results (ROC AUC = 0.505).
+
+### Bias-Variance Trade Off
+
+The Bias-Variance trade-off is more apparent with our decision tree, in which we are adusting the cp, which is related to how many splits our decision tree makes. The lower the cp, the more splits it makes, and the more complex the model is. 
+
+By increasing the complexity, or decreasing bias, we tend to capture the trends better, but a higher complexity leads to over fitting, making the model unable to properly function for new data points. But if we did not highten the complexity, in our case, we would underfit, i.e. we won't be able to make accurate predictions because the model does not see the trends.
+
+In relation to our logistic regression, our complexity is related to the number of predictors used. When we decreased the complexity, we increased our bias, leading to our model to underfit worse than the model with the complete predictors. 
+
+### Cross-Validation
+
+Let's use caret to create our cross validation model, and accuracy, precision, recall, and F1-score:
+
+```{r caret cross validation}
+
+train_control <- trainControl(
+  method = "repeatedcv",
+  repeats = 3,
+  number = 10,  
+  classProbs = TRUE,
+  summaryFunction = function(data, lev = NULL, model = NULL) {
+    default <- defaultSummary(data, lev, model)
+    pr <- prSummary(data, lev, model)
+    c(default, pr)
+  },
+  savePredictions = TRUE
+)
+
+model_cv <- train(
+  Churn ~ .,
+  data = churnTrain,
+  method = "rpart", 
+  trControl = train_control,
+  #weights = ifelse(churnTrain$Churn == "Yes",12, 1),
+  metric = "Accuracy"
+)
+
+# Print the model summary
+print(model_cv)
+
+# View the cross-validation results
+cv_results <- model_cv$results
+print(cv_results %>% dplyr::select(cp, Accuracy, Precision, Recall, F))
+
+```
+
+the cp value of 0.0006029685 had the lowest accuracy (0.7148369), Recall (0.9652995), and F-stat (0.8314882), but it has the highest precision (0.7305843). It is also the most complex iteration of the model.
+
+The model that the caret library deemed optimal is the cp value of 0.0007168157, giving the highest accuracy (0.7214809), recall (0.9807560), and F statistic (0.8369769), with the least complexity.
+
+cp value of 0.0006957328 gave the same results, but is slightly more complex than the optimal.
+
+
+### Classification
+
+Let's try using a Random Forest Classifier model to predict customer churn.
+
+
+
+
+
+
+## Regression-Based Methods
+
+We have previously tried classification methods. Now, let's try regression methods.
+
+
+### Logistic Regression
+
+Let's fit a logistic regression model using Churn as the dependent variable and Tenure, MonthlyCharges, and TotalCharges as independent variables. Then, let's Interpret the coefficients and assess model significance using p-values.
+
+```{r logistic regression final}
+
+model_logistic_fin <- glm(formula = Churn ~ Tenure + MonthlyCharges + TotalCharges, family = "binomial", data=churnTrain)
+
+summary(model_logistic_fin)
+
+ll.null <- model_logistic_fin$null.deviance/-2
+ll.proposed <- model_logistic_fin$deviance/-2
+
+cat("\n\nThe Psuedo R^2 is:", (ll.null-ll.proposed)/ll.null)
+cat("\nAnd the p-value is: ", 1-pchisq(2*(ll.proposed-ll.null), df=(length(model_logistic_fin$coefficients)-1)))
+```
+
+It seems like no coefficient correlated significantly to Churn. The closest would be tenure (Z = 0.861, p-val = 0.389), followed by Total Charges (z = -0.724, p-val = 0.469), and finally, the Monthly Charges (z = 0.408, p-val = 0.683). All p-value is insignificant.
+
+The overall p-value of the model is 0.804, with a Psuedo $R^2$ of 0.0001
+
+This all shows that the model is not able to predict customer churn, as all variables do not correlate with it. 
+
+### Regression in High Dimensions
+
+Having a high-dimensional model can be pretty problematic.
+
+First, they can be pretty hard on the machine, needing long training times.
+
+Second, they can cause overfitting, leading to the model not being able to see the pattern of the data. This leads to errors in predicting the result when a new data point comes.,
+
+third, is that most of the time, predictors correlate with each other, which can ruin the training of the model. 
+
+
+One way to combat this is to use Principal Component Analysis (PCA) on numerical features to be use variables that correlate together as one component, instead of using all of them.
+
+Let's try creating a PCA of Tenure, MonthlyCharges, and TotalCharges.
+
+```{r pca}
+
+numeric_scaled_data <- cust_churn_norm_features %>% dplyr::select(where(is.numeric))
+
+pca_result <- prcomp(numeric_scaled_data, center = TRUE, scale. = TRUE)
+
+print(pca_result)
+cat("\n\n")
+summary(pca_result)
+
+```
+
+We can see that the first component is negatively correlated to both Tenure (R=-0.5811163 ) and Total Charges (R=-0.7131222), and significantly so. We can then say that, when tenure decreases, the total charge also decreases. This makes sense, because customers with higher tenure pay more in the long run.
+
+The second component is significantly correlated with Tenure (R=0.57012040), while is negatively correlated with Monthly Charges (R=-0.82146001). This tells us that when the monthly charges increase, the tenure increases, or vice versa.
+
+The last componenent is then the opposite of the first component, where it says that it is negatively correlated to Tenure (R=-0.5807466), but is positively correlated to total charges (R=0.7009212)
+
+### Ridge Regression
+
+Implement Ridge Regression using Churn as the target variable and Tenure, MonthlyCharges, TotalCharges, and additional customer demographic features as predictors.
+
+Identify the optimal lambda using cross-validation.
+
+```{r ridge regression}
+
+predictors <- c("Tenure", "MonthlyCharges", "TotalCharges")
+
+encoded_contract <- model.matrix(~ Contract - 1, data = churnTrain)
+encoded_contract <- as.data.frame(encoded_contract)
+num_preds <- churnTrain  %>% dplyr::select(all_of(predictors)) %>% as.data.frame()
+preds <- cbind(num_preds, encoded_contract)
+
+enc_cont_test <- model.matrix(~ Contract - 1, data = churnTest)
+enc_cont_test <- as.data.frame(enc_cont_test)
+preds_num_test <- churnTest  %>% dplyr::select(all_of(predictors)) %>% as.data.frame()
+preds_test <- cbind(preds_num_test, enc_cont_test)
+
+
+y <- churnTrain  %>% dplyr::select(Churn)
+
+# Set up cross-validation
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+weight = 2.70037105751
+ridge_model <- train(
+  x = preds,
+  y = y$Churn,
+  method = "glmnet",
+  trControl = ctrl,
+  tuneGrid = expand.grid(alpha = 0, lambda = seq(0, 50, length = 51)),
+  weights = ifelse(churnTrain$Churn == "Yes",weight, 1),
+)
+
+cat("The optimal lambda is:")
+print(ridge_model$bestTune$lambda)
+
+# Make predictions and evaluate the model
+predictions <- predict(ridge_model, newdata = preds_test)
+predictions <- factor(predictions, levels = levels(y$Churn))
+confusionMatrix(predictions, churnTest$Churn)
+
+
+```
+
+The in this particular ridge regression model, the most optimal lambda value is 50. I wager that if we increase the lambda value, it will take the highest possible value. 
+
+Looking at the confusion matrix, the model only gives out a prediction of "No", Changing the weight of "Yes" in training seemes to be able to improve things, but after multiple iterations, the model only gives out "Yes" (true positives and false positives), or "No" (True Negatives or False Negatives) with each change. A better interpolation approach would be required into making this into a working model.
+
+However, due to the prevalence of "No", it is correct 0.7297 accounting to "No" being some 73% of the dataset.
+The p-value given by the model is 0.5116.
+
+
+### Lasso Regression
+
+Now, let's try the Lasso Regression
+
+```{r lasso}
+lasso_model <- train(
+  x = preds,
+  y = y$Churn,
+  method = "glmnet",
+  trControl = ctrl,
+  tuneGrid = expand.grid(alpha = 0, lambda = seq(0, 50, length = 51)),
+  weights = ifelse(churnTrain$Churn == "Yes",weight, 1),
+)
+
+cat("The optimal lambda is:")
+print(lasso_model$bestTune$lambda)
+
+# Make predictions and evaluate the model
+predictions_lasso <- predict(lasso_model, newdata = preds_test)
+predictions_lasso <- factor(predictions_lasso, levels = levels(y$Churn))
+confusionMatrix(predictions_lasso, churnTest$Churn)
+```
+
+The lasso regression provides the same exact results as the ridge regression.
+
+
+
