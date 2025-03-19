@@ -257,7 +257,7 @@ cat("\n\nThe Psuedo R^2 is:", (ll.null-ll.proposed)/ll.null)
 cat("\nAnd the p-value is: ", 1-pchisq(2*(ll.proposed-ll.null), df=(length(model_logistic_2$coefficients)-1)))
 
 ```
-We can see that the model did better than the last, getting a better result (R^2 = 0.00066, p-val = 0.084). 
+We can see that the model did better than the last, getting a better result (R^2 = 0.00067, p-val = 0.02). 
 
 let's now get the AUC of both:
 
@@ -358,9 +358,9 @@ print(cv_results %>% dplyr::select(cp, Accuracy, Precision, Recall, F))
 
 ```
 
-the cp value of 0.0006029685 had the lowest accuracy (0.7148369), Recall (0.9652995), and F-stat (0.8314882), but it has the highest precision (0.7305843). It is also the most complex iteration of the model.
+the cp value of 0.0006029685 had the lowest accuracy (0.7121250), Recall (0.9642768), and F-stat (0.8299766), but it has the highest precision (0.7288211). It is also the most complex iteration of the model.
 
-The model that the caret library deemed optimal is the cp value of 0.0007168157, giving the highest accuracy (0.7214809), recall (0.9807560), and F statistic (0.8369769), with the least complexity.
+The model that the caret library deemed optimal is the cp value of 0.0007168157, giving the highest accuracy (0.7236137), recall (0.9877466), and F statistic (0.8390416), with the least complexity.
 
 cp value of 0.0006957328 gave the same results, but is slightly more complex than the optimal.
 
@@ -369,8 +369,45 @@ cp value of 0.0006957328 gave the same results, but is slightly more complex tha
 
 Let's try using a Random Forest Classifier model to predict customer churn.
 
+```{r rand forest}
+
+train_control <- trainControl(
+  method = "cv",
+  number = 10,  
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  search = "random",
+  savePredictions = TRUE
+)
+
+model_rf <- train(
+  Churn ~ .,
+  data = churnTrain,
+  method = "rf", 
+  trControl = train_control,
+  #weights = ifelse(churnTrain$Churn == "Yes",12, 1),
+  metric = "ROC",
+  tuneLength  = 10
+)
+
+```
 
 
+Next, let's check the results of our random forest model:
+
+```{r rf model evaluate}
+
+
+print(model_rf)
+print(model_rf$results)
+print(model_rf$bestTune)
+
+plot(model_rf)
+```
+
+The best hyperparameter for the model is mtry = 8. However, the ROC is lower than 0.5, which indicates that random guessing might be better than using the model.
+
+Overall, the classification model didn't capture the trends of the data. 
 
 ## Regression-Based Methods
 
