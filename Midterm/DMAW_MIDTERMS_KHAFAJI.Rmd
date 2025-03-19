@@ -1,8 +1,11 @@
 ---
 title: "DMAW_MIDTERMS_KHAFAJI"
 output:
-  pdf_document: default
-  html_document: default
+  pdf_document:
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{fontspec}
+  - \setmainfont{DejaVu Sans} 
 ---
 
 <style type="text/css">
@@ -369,8 +372,6 @@ Let's try using a Random Forest Classifier model to predict customer churn.
 
 
 
-
-
 ## Regression-Based Methods
 
 We have previously tried classification methods. Now, let's try regression methods.
@@ -395,7 +396,7 @@ cat("\nAnd the p-value is: ", 1-pchisq(2*(ll.proposed-ll.null), df=(length(model
 
 It seems like no coefficient correlated significantly to Churn. The closest would be tenure (Z = 0.861, p-val = 0.389), followed by Total Charges (z = -0.724, p-val = 0.469), and finally, the Monthly Charges (z = 0.408, p-val = 0.683). All p-value is insignificant.
 
-The overall p-value of the model is 0.804, with a Psuedo $R^2$ of 0.0001
+The overall p-value of the model is 0.804, with a Psuedo R^2 of 0.0001
 
 This all shows that the model is not able to predict customer churn, as all variables do not correlate with it. 
 
