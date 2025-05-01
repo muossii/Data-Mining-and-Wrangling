@@ -1,0 +1,321 @@
+---
+title: "KHAFAJI_FA5"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(conflicted)
+library(readxl)
+library(ggrepel)	# for scatter plot point labels 
+library(kableExtra) # for printing tables 
+library(cowplot)	# for side by side plots
+library(splines)
+library(Metrics)
+library(skimr)
+library(ggcorrplot)
+library(mice)
+library(naniar)
+library(caret)
+library(pROC)
+
+```
+
+# Titanic Dataset Classification via Logistic Regression
+
+## Data Preprocessing
+
+### Loading Dataset
+
+First, let's load our data. The online data set is already separated into training and testing data sets. However, the test data set is missing the "survived" column, and so for the intent of our study, we will mostly be looking at the training data set. 
+
+However, any change in the structure of the data set, e.g. one-hot encoding, will be done on both.
+
+
+```{r load data}
+titanic_test_data <- read_csv('test.csv')
+cat("\n\n")
+titanic_train_data <- read_csv('train.csv') 
+titanic_data <- bind_rows(titanic_train_data, titanic_test_data)
+
+head(titanic_data)
+```
+
+The data set has the following features:
+
+Pclass: Passenger class (1st, 2nd, 3rd)
+
+Sex: Gender of the passenger
+
+Age: Age of the passenger
+
+SibSp: Number of siblings/spouses aboard
+
+Parch: Number of parents/children aboard
+
+Fare: Ticket fare
+
+Embarked: Port of embarkation
+
+Survived: Target variable (0 = No, 1 = Yes)
+
+
+### Quick Exploratory Data Analysis
+
+Let's do a quick exploratory data analysis using the skimr package 
+
+```{r}
+titanic_data %>% skim()
+
+titanic_quanti_only <- titanic_data %>% select(c("Pclass", "Age", "SibSp", "Parch", "Fare"))
+
+```
+
+We can see that the feature "Cabin" is missing for most of the observations, with 687 missing instances, or 22.9% completeness rate. 
+
+Given that The categorical variable "Embarked" have 2 missing observations, we would be looking to simply delete these 2 instances, as their deletion would unlikely to change the overall effect to the model.
+
+Fare also has one missing observation, and we should also drop that row.
+
+Age is missing 263 observations, or being only 80% complete. For the last two variables, we would be looking to impute the missing values using a multivariate imputation.
+
+Notice that survived is missing for 400 observations, this came from the test data set, and we believe it is better to leave them there, given that they are blank by design.
+
+
+Let's then check the correlation matrix of the quantitative columns
+
+```{r correlation matrix}
+cor_matrix_titanic <- cor(titanic_quanti_only)
+ggcorrplot(cor_matrix_titanic)
+
+```
+
+As we can see, the Parch and SibSp correlated, although only moderately. Thus, we assume that there would be no multicollinearity problems.
+
+
+### Data Cleaning:
+
+First, let's filter out the columns we won't need for building the model, i.e. the columns that only serve to identify the given entry. We included tickets here because, although not necessarily specific to only that observation, it is not feasible to add in our model with 681 unique observations out of 891 observations.
+
+We have also taken the liberty of converting the "survived" and "Pclass" features into a factor data type.
+
+```{r factorize survived}
+
+titanic_data <- titanic_data %>% mutate(across(c("Survived", "Pclass"), as.factor)) %>% select(-c("Name", "Ticket", "PassengerId"))
+
+str(titanic_data)
+
+```
+
+
+
+```{r missing values handling}
+set.seed(12345)
+
+titanic_data <- titanic_data %>% select(-c("Cabin")) %>% drop_na(c("Embarked", "Fare"))
+
+
+titanic_imputed <- mice(titanic_data, maxit = 0, print=FALSE)
+
+meth = titanic_imputed$method
+pred_matrix <- titanic_imputed$predictorMatrix
+
+meth[!names(meth) %in% c("Age")] <- ""
+pred_matrix[, "Survived"] <- 0
+
+titanic_imputed <- mice(titanic_data, method = meth, predictorMatrix = pred_matrix ,printFlag = FALSE)
+
+titanic_data <- complete(titanic_imputed, 1)
+
+```
+
+Note that we excluded the target variable, survived, from the multivariate imputation, both as a column to be imputed and as a predictor.
+
+```{r}
+titanic_data %>% skim()
+```
+
+Next, we want to create one hot encoding of the following categorical features:
+
+```{r one-hot encoding}
+
+dummy_model <- dummyVars( ~ Pclass + Embarked, data = titanic_data, fullRank = TRUE)
+df_encoded <- predict(dummy_model, newdata = titanic_data)
+
+titanic_data_final <- cbind(titanic_data[, !(names(titanic_data) %in% c("Pclass", "Embarked"))], df_encoded) %>%
+  mutate(across(c("Pclass.2", "Pclass.3", "EmbarkedQ", "EmbarkedS"), as.factor)) %>%
+  mutate(across(where(~ is.factor(.) && nlevels(.) == 2),
+                ~ factor(., levels = levels(.), labels = c("No", "Yes")))) %>%
+  mutate(across("Sex", as.factor))
+
+
+head(titanic_data_final)
+titanic_data_final %>% skim()
+
+```
+
+Since we will be using logistic regression, it is not required to standardize our data, hence, our work at data cleaning is done.
+
+Now, we are ready to split the data set again:
+
+```{r splitting data}
+
+titanic_train <- titanic_data_final %>% dplyr::filter(!is.na(Survived))
+titanic_test <- titanic_data_final %>% dplyr::filter(is.na(Survived)) %>% select(-c("Survived"))
+```
+
+but since only the training data has observations for survived, let's split it further
+
+```{r splitting further}
+
+train_index <- createDataPartition(titanic_train$Survived, p = 0.8, list = FALSE)
+train_data <- titanic_train[train_index, ]
+test_data <- titanic_train[-train_index, ]
+```
+
+
+### More Exploratory Data Analysis
+
+
+```{r}
+titanic_train %>% skim()
+
+```
+Now that we have cleaned our data, we can do more exploratory data analysis.
+
+Let's get the distribution of the surviving passengers:
+
+```{r}
+titanic_train %>% ggplot(aes(x=Survived)) +
+  geom_bar()
+
+```
+
+As we can see, the number of passengers surviving the tragedy is less than those that perished because of it, with the number of surviving passengers being around 60% to 70% of the perished passengers.
+
+Now, let's check the age distribution of the passengers:
+
+```{r}
+titanic_train %>% ggplot(aes(x=Age)) +
+  geom_histogram(binwidth = 5)
+
+```
+
+We can see that the distribution is skewed to the left, with most passengers being around 20 to 35. 
+
+Now, let's check the sex.
+
+```{r}
+
+titanic_train %>% ggplot(aes(x=Sex)) +
+  geom_bar()
+```
+
+Most of the passengers of the titanic are male, double than the number of females in the ship. 
+
+Let's then check the fare:
+
+```{r}
+titanic_train %>% ggplot(aes(x=Fare)) +
+  geom_histogram(binwidth = 10)
+
+```
+Most of the passengers paid somewhere between 0 to 40 USD for their ticket.
+
+## Model Implementation and Evaluation
+
+Now, let's train a logistic regression model using caret:
+
+```{r model creation}
+
+model <- train(
+  Survived ~ .,
+  data = train_data,
+  method = "glm",
+  family = binomial,
+  trControl = trainControl(
+    method = "cv",
+    number = 10,
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary,
+    savePredictions = "final"
+  ),
+  metric = "ROC"
+)
+
+```
+
+Now, let's test the new model:
+
+### Creating predictions
+
+```{r predicitng}
+
+pred_class <- predict(model, newdata = test_data)
+true_class <- test_data$Survived
+
+# Probabilities for ROC
+pred_probs <- predict(model, newdata = test_data, type = "prob")[, "Yes"]
+
+```
+
+### Confusion Matrix, Accuracy, Precicion, Recall, and F1-Score
+
+```{r model evaluation}
+
+cm <- confusionMatrix(pred_class, true_class, positive = "Yes", mode = "prec_recall")
+print(cm)
+
+cm_df <- as.data.frame(cm$table)
+names(cm_df) <- c("Predicted", "Actual", "Freq")
+
+ggplot(data = cm_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Freq), vjust = 1.5, size = 6) +
+  scale_fill_gradient(low = "lightblue", high = "steelblue") +
+  labs(
+    title = "Confusion Matrix Heatmap",
+    x = "Actual Class",
+    y = "Predicted Class"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+We can see from the given statistics that the accuracy of our model is at 0.8305, While its precision, recall, and F1 score are all at 0.7794
+
+
+### ROC Curve and AUC
+
+```{r ROC and AUC}
+
+roc_obj <- roc(test_data$Survived, pred_probs )
+
+par(pty = "s")
+plot(roc_obj, main = "ROC Curve", legacy.axes = TRUE, percent=TRUE, xlab = "False Positive Percentage", ylab = "True Positive Percentage")
+auc_val <- pROC::auc(roc_obj)
+cat(sprintf("AUC      : %.3f\n", auc_val))
+
+
+```
+
+The statistics show an area under the curve of 0.862, signifying that the model is good for predicting the survival of a passenger. 
+
+The ROC Curve also shows that a threshold close to 60% to 80% would provide the best tradeoffs between false positives and true positives, since we don't want a lot of false positives, but we also want to be able to identify if a passenger did survive, so that we can support them.
+
+## Results Interpretation and discussion
+
+Our logistic regression model was trained to predict the survival of the passengers based on the following predictors: Sex (male or female), Passenger Class (1, 2, or 3), Port of Embarkment (C, S, or Q), Number of siblings/spouses aboar, Number of parents/children aboard, and their Ticket fare.
+
+891 rows of data were used, 80% of which were used to train the model using caret glm, and 20% were used to test the model.
+
+The test showed that the model has an accuracy of 0.8305, meaning that the model largely predicts around the correct value. The model also showed a precision of 0.7794, showing that, 78% of the positive predictions of the model is actually a positive. A recall of 0.7794 also shows that, for 78% of the time, the model is able to predict correctly that a positive event happened, given that the positive event (the passenger surviving), did happen. 
+
+The F1 score simply takes this two into account, and thus an F1 score of 0.7794 indicates that the model, 78% of the time, can be trusted to be able to properly predict if a passenger survived.
+
+The AUC score also showed that the model performs well in predicting the survival of the passenger. And, depending on our risk appetite between true positives and false positives, a threshold of aroun 0.6 to 0.8 is best for the model.
+
+
+
