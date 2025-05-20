@@ -1,0 +1,421 @@
+---
+title: "SA_2_AFUNDAR_KHAFAJI_RODILLAS"
+author: "Audrie Lex L. Afundar"
+date: "2025-05-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(ggplot2)
+library(glmnet)
+library(rsample)
+library(caret)
+library(pROC)
+library(tidyverse)
+library(corrplot)
+library(car)
+library(stringr)
+library(rpart)
+library(gbm)
+```
+
+## Data Preprocessing:
+
+```{r}
+
+train_churn<-read.csv("churn-bigml-80.csv")
+test_churn<-read.csv("churn-bigml-20.csv")
+
+head(test_churn)
+head(train_churn)
+
+```
+
+Merging the dataset first for easier data cleaning.
+
+```{r}
+full_churn <- rbind(train_churn, test_churn)
+
+head(full_churn)
+
+```
+
+Dropping non-predictive variables so it wont affect the model's performance. Thus, removing State and Account.length since they have no effect on the model.
+
+```{r}
+full_churn<- subset(full_churn, select = -c(State,Account.length))
+
+head(full_churn)
+
+```
+
+Changing categorical variables such as Churn from True or False to 1 and 0, International plan from yes or no to 1 and 0 and Voice mail plan from yes or no to 1 and 0. This will make these variables easier to work with once the model is being created.
+
+
+```{r}
+full_churn$Churn <- ifelse(full_churn$Churn == "True", 1, 0)
+full_churn$International.plan <- ifelse(full_churn$International.plan == "Yes", 1, 0)
+full_churn$Voice.mail.plan <- ifelse(full_churn$Voice.mail.plan == "Yes", 1, 0)
+
+head(full_churn)
+
+```
+
+Handle categorical variables via one-hot encoding. Since there are no apparent categorical variables with multiple classes, the only viable variable here would be Area code with 3 classes. 
+
+
+```{r}
+full_churn$Area.code <- as.factor(full_churn$Area.code)
+area_dummies <- model.matrix(~ Area.code - 1, data = full_churn)
+
+full_churn <- cbind(full_churn[, !names(full_churn) %in% "Area.code"], area_dummies)
+
+head(full_churn)
+
+
+```
+
+Checking if there are any NAs from the dataset that needs to be removed.
+
+```{r}
+colSums(is.na(full_churn))
+
+```
+There are no NAs from the dataset.
+
+
+## Visualizations
+
+
+Summarize key features using statistics and visualizations (e.g., churn rate, distribution of call minutes, service usage).
+
+
+
+```{r}
+ggplot(full_churn, aes(x=Total.day.minutes))+
+  geom_histogram(fill="green", color="black")+
+  labs(title = "Distribution of Total day minutes", x = "Total.day.minutes", y = "Frequency")
+
+```
+
+```{r}
+churn_counts <- full_churn %>%
+  count(Churn) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+ggplot(churn_counts, aes(x="", y=n, fill=Churn)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  geom_text(aes(label=paste0(round(percentage, 1), "%")), 
+            position=position_stack(vjust=0.5)) + 
+  labs(title="Churn Distribution") 
+
+
+```
+
+```{r}
+ggplot(full_churn, aes(x=Total.intl.charge))+
+  geom_histogram(fill="green", color="black")+
+  labs(title = "Distribution of Total intl charges", x = "Total.intl.charge", y = "Frequency")
+
+```
+
+```{r}
+
+ggplot(full_churn, aes(x=International.plan))+
+  geom_bar(fill="green", color="black")+
+  labs(title = "Frequency of International.plan", x ="International.plan", y = "Count")
+
+```
+
+```{r}
+numeric_vars <- sapply(full_churn, is.numeric)
+full_churn_numeric <- full_churn[, numeric_vars]
+
+cor_matrix <- cor(full_churn_numeric, use = "complete.obs")
+
+
+
+corrplot(cor_matrix, method = "color", type = "upper", tl.cex = 0.8)
+
+```
+
+Examine class imbalance and report if applicable.
+
+As seen in the Churn distribution, only 14.5% of the customers who canceled their plan, while 85.5% continues to have their plans. This shows a class imbalance.
+
+
+## Modeling and Comparison
+
+
+```{r}
+
+set.seed(421)
+
+split <- initial_split(full_churn, prop = 0.8, strata = "Churn")
+
+churn_train <- training(split)
+churn_test <- testing(split)
+
+```
+
+
+```{r}
+
+model_churn <- glm(Churn ~ . , data=churn_train, family=binomial)
+
+summary(model_churn)
+
+```
+## Lasso Regression
+
+```{r}
+x<-model.matrix(Churn ~ . , data=churn_train)
+y<-as.factor(churn_train$Churn)
+
+
+```
+
+```{r}
+
+cross_v_churn<-cv.glmnet(x,y, family="binomial", type.measure="class", alpha=1)
+
+lambda_b<-cross_v_churn$lambda.min
+
+```
+
+
+```{r}
+multi_model_churn_lambda<-glmnet(x,y , family="binomial", lambda=lambda_b, alpha=1)
+
+coef(multi_model_churn_lambda, s=lambda_b)
+
+```
+
+
+```{r}
+
+plot(cross_v_churn)
+
+```
+
+## Performance metrics for logistic regression
+
+```{r}
+test_pred_prob <- predict(model_churn, newdata = churn_test, type = "response")
+test_pred_class <- ifelse(test_pred_prob > 0.5, 1, 0)
+
+```
+
+
+
+
+```{r}
+
+log_perf<-confusionMatrix(factor(test_pred_class), factor(churn_test$Churn))
+
+log_perf
+
+accuracy <- log_perf$overall["Accuracy"]
+
+precision <- log_perf$byClass["Pos Pred Value"]
+
+recall <- log_perf$byClass["Sensitivity"]
+
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+roc_curve <- roc(churn_test$Churn, test_pred_prob)
+auc_value <- auc(roc_curve)
+
+cat("Model Performance Metrics:\n")
+cat("Accuracy: ", round(accuracy, 4), "\n")
+cat("Precision: ", round(precision, 4), "\n")
+cat("Recall: ", round(recall, 4), "\n")
+cat("F1-Score: ", round(f1_score, 4), "\n")
+cat("AUC Score:", round(auc_value, 4), "\n")
+
+```
+
+The Logistic regression model garnered an 86.96% accuracy which suggests a good prediction power from the model. Moreover, the F1-Score of the model is 92.71% with an AUC Score of 0.8467 which is a good model discrimination. However, there are a lot of false positives (70), which may suggest that the model is weak at predicting true positives.
+
+
+## Performance Metrics for Lasso regression
+
+
+```{r}
+x_test<-model.matrix(Churn ~ . , data=churn_test)
+
+test_pred_prob_lasso <- predict(multi_model_churn_lambda, newx = x_test, type = "response")
+test_pred_class_lasso <- ifelse(test_pred_prob_lasso > 0.5, 1, 0)
+
+```
+
+
+
+
+```{r}
+
+log_perf_lasso<-confusionMatrix(factor(test_pred_class_lasso), factor(churn_test$Churn))
+
+log_perf_lasso
+
+accuracy <- log_perf$overall["Accuracy"]
+
+precision <- log_perf$byClass["Pos Pred Value"]
+
+recall <- log_perf$byClass["Sensitivity"]
+
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+roc_curve <- roc(churn_test$Churn, test_pred_prob_lasso)
+auc_value <- auc(roc_curve)
+
+cat("Model Performance Metrics:\n")
+cat("Accuracy: ", round(accuracy, 4), "\n")
+cat("Precision: ", round(precision, 4), "\n")
+cat("Recall: ", round(recall, 4), "\n")
+cat("F1-Score: ", round(f1_score, 4), "\n")
+cat("AUC Score:", round(auc_value, 4), "\n")
+
+```
+The Lasso regression model garnered an 86.66% accuracy which suggests a good prediction power from the model. Moreover, the F1-Score of the model is 92.71% with an AUC Score of 0.8451 which is a good model discrimination. However, there are a lot of false positives (74), which may suggest that the model is weak at predicting true positives.
+
+
+## Tree Based Models
+
+### Decision Tree
+
+#### Model Creation
+
+Let's create a decision tree model.
+
+```{r decision tree model creation}
+
+churn_desc_train <- churn_train %>% mutate(Churn = as.factor(Churn))
+churn_desc_test <- churn_test %>% mutate(Churn = as.factor(Churn))
+
+churn.true_class <- churn_desc_test$Churn
+
+control_rcv <- trainControl(method='repeatedcv', 
+                        number=10, 
+                        repeats=3,
+                        allowParallel = TRUE)
+
+churn.tree <- train(
+  Churn ~ .,
+  data = churn_desc_train,
+  method = "rpart",
+  trControl = control_rcv
+)
+
+```
+
+#### Results and Metrics
+
+```{r decision tree model metrics}
+
+churn.tree.pred_class <- predict(churn.tree, newdata = churn_desc_test)
+churn.tree.pred_prob <- predict(churn.tree, newdata = churn_desc_test, type = "prob")[, "1"]
+
+
+churn_desc_tree_cm <- confusionMatrix(churn.tree.pred_class, churn.true_class, positive = "1", mode = "prec_recall")
+print(churn_desc_tree_cm)
+roc_obj <- roc(churn.true_class, churn.tree.pred_prob)
+
+
+cat("Decision Tree Performance Metrics:\n")
+cat("Accuracy:", round(churn_desc_tree_cm$overall["Accuracy"], 4),"\n")
+cat("Precision:", round(churn_desc_tree_cm$byClass["Precision"], 4),"\n")
+cat("Recall:", round(churn_desc_tree_cm$byClass["Recall"], 4),"\n")
+cat("F1-Score:", round(churn_desc_tree_cm$byClass["F1"], 4),"\n")
+cat("Area under Curve:", round(pROC::auc(roc_obj), 4),"\n")
+
+varImp(churn.tree)
+```
+
+### Random Forest
+
+```{r random forest model creation}
+
+
+churn.rf <- train(
+  Churn ~ .,
+  data = churn_desc_train,
+  method = "rf",
+  trControl = control_rcv
+)
+```
+
+```{r rand forest model metrics}
+
+churn.rf.pred_class <- predict(churn.rf, newdata = churn_desc_test)
+churn.rf.pred_prob <- predict(churn.rf, newdata = churn_desc_test, type = "prob")[, "1"]
+
+
+churn_desc_rf_cm <- confusionMatrix(churn.rf.pred_class, churn.true_class, positive = "1", mode = "prec_recall")
+print(churn_desc_rf_cm)
+roc_obj <- roc(churn.true_class, churn.rf.pred_prob)
+
+
+cat("Random Forest Performance Metrics:\n")
+cat("Accuracy:", round(churn_desc_rf_cm$overall["Accuracy"], 4),"\n")
+cat("Precision:", round(churn_desc_rf_cm$byClass["Precision"], 4),"\n")
+cat("Recall:", round(churn_desc_rf_cm$byClass["Recall"], 4),"\n")
+cat("F1-Score:", round(churn_desc_rf_cm$byClass["F1"], 4),"\n")
+cat("Area under Curve:", round(pROC::auc(roc_obj), 4),"\n")
+
+varImp(churn.rf)
+```
+
+
+
+
+### Gradient Boosting
+
+```{r gbm model creation}
+
+tune_grid <- expand.grid(
+  n.trees = c(100, 200, 300),
+  interaction.depth = c(3, 5),
+  shrinkage = c(0.01, 0.05, 0.1),
+  n.minobsinnode = 10
+)
+
+churn.gbm <- train(
+  Churn ~ .,
+  data = churn_desc_train,
+  method = "gbm",
+  trControl = control_rcv,
+  tuneGrid = tune_grid,
+  verbose = FALSE
+)
+
+```
+
+
+
+```{r gbm model metrics}
+
+churn.gbm.pred_class <- predict(churn.gbm, newdata = churn_desc_test)
+churn.gbm.pred_prob <- predict(churn.gbm, newdata = churn_desc_test, type = "prob")[, "1"]
+
+
+churn_desc_gbm_cm <- confusionMatrix(churn.gbm.pred_class, churn.true_class, positive = "1", mode = "prec_recall")
+print(churn_desc_gbm_cm)
+roc_obj <- roc(churn.true_class, churn.gbm.pred_prob)
+
+
+cat("Gradient Boosting Performance Metrics:\n")
+cat("Accuracy:", round(churn_desc_gbm_cm$overall["Accuracy"], 4),"\n")
+cat("Precision:", round(churn_desc_gbm_cm$byClass["Precision"], 4),"\n")
+cat("Recall:", round(churn_desc_gbm_cm$byClass["Recall"], 4),"\n")
+cat("F1-Score:", round(churn_desc_gbm_cm$byClass["F1"], 4),"\n")
+cat("Area under Curve:", round(pROC::auc(roc_obj), 4),"\n")
+
+varImp(churn.gbm)
+```
+
+
+
+
